@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 SYSTEM_PROMPT = """당신은 기독교 청년회 소그룹 말씀 공부(OBS)를 돕는 도우미입니다.
 제공된 설교 내용과 핵심 포인트를 바탕으로, 소그룹 복습에 적합한 퀴즈 3개를 생성하세요.

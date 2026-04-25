@@ -8,7 +8,15 @@ from services.quiz_generator import generate_quizzes
 
 router = APIRouter()
 
-# ... (중략) ...
+
+class ProcessRequest(BaseModel):
+    r2_key: str
+
+
+class ProcessResponse(BaseModel):
+    sections: list
+    quizzes: list
+
 
 @router.post("/process", response_model=ProcessResponse)
 def process_obs(request: ProcessRequest):

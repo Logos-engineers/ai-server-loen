@@ -29,13 +29,19 @@ def process_obs(request: ProcessRequest):
         sections = parse_obs_sections(pdf_text)
         
         print(f"[AI] Parsed sections count: {len(sections)}", file=sys.stderr)
+        
+        # generate_quizzes 결과가 dict인지 list인지에 따라 처리
         ai_result = generate_quizzes(sections)
         
-        quizzes = ai_result.get("quizzes", [])
-        summary = ai_result.get("summaries", [])
+        if isinstance(ai_result, dict):
+            quizzes = ai_result.get("quizzes", [])
+            summary = ai_result.get("summaries", [])
+        else:
+            # 리스트로 왔을 경우 (이전 버전 호환성)
+            quizzes = ai_result
+            summary = []
         
-        print(f"[AI] Generated quizzes count: {len(quizzes)}", file=sys.stderr)
-        print(f"[AI] Generated summary count: {len(summary)}", file=sys.stderr)
+        print(f"[AI] Generated summaries: {len(summary)}, quizzes: {len(quizzes)}", file=sys.stderr)
         
         return ProcessResponse(sections=sections, summary=summary, quizzes=quizzes)
     except Exception as e:

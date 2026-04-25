@@ -15,6 +15,7 @@ class ProcessRequest(BaseModel):
 
 class ProcessResponse(BaseModel):
     sections: list
+    summary: list[str]
     quizzes: list
 
 
@@ -28,10 +29,15 @@ def process_obs(request: ProcessRequest):
         sections = parse_obs_sections(pdf_text)
         
         print(f"[AI] Parsed sections count: {len(sections)}", file=sys.stderr)
-        quizzes = generate_quizzes(sections)
+        ai_result = generate_quizzes(sections)
+        
+        quizzes = ai_result.get("quizzes", [])
+        summary = ai_result.get("summaries", [])
         
         print(f"[AI] Generated quizzes count: {len(quizzes)}", file=sys.stderr)
-        return ProcessResponse(sections=sections, quizzes=quizzes)
+        print(f"[AI] Generated summary count: {len(summary)}", file=sys.stderr)
+        
+        return ProcessResponse(sections=sections, summary=summary, quizzes=quizzes)
     except Exception as e:
         print(f"[AI] ERROR: {str(e)}", file=sys.stderr)
         traceback.print_exc()

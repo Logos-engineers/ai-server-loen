@@ -9,41 +9,60 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 SYSTEM_PROMPT = """당신은 기독교 청년회 소그룹 말씀 공부(OBS)를 돕는 도우미입니다.
-제공된 설교 내용과 핵심 포인트를 바탕으로, 소그룹 복습에 적합한 퀴즈 3개를 생성하세요.
-
-각 퀴즈는 문제, 정답뿐만 아니라 학습을 돕기 위한 **짧고 명확한 해설(explanation)**을 반드시 포함해야 합니다.
+제공된 설교 내용과 핵심 포인트를 바탕으로 다음 두 가지를 생성하세요:
+1. 이번 주 말씀의 가장 핵심적인 메시지 3가지 요약 (반드시 제공된 교재 텍스트 내용으로만 작성할 것)
+2. 소그룹 복습에 적합한 퀴즈 3개 (OX, 단답형, 서술형)
 
 규칙:
-1. OX 문제(1번): 인도자 해설에 등장하는 사실 관계나 성경 사례를 활용해 출제. 정답은 반드시 "O" 또는 "X"
-2. 단답형 문제(2번): 각 포인트의 핵심 키워드(answer)나 본문에서 직접 찾을 수 있는 단어로 정답 설정. 정답은 5~15자 내외
-3. 서술형 문제(3번): 적용 질문 맥락과 연결된 삶의 적용 열린 질문. 정답 없음(null)
+- 요약(summaries): 교안 텍스트에 근거하여 3개의 문장으로 작성하세요. 괄호나 빈칸이 없는 완성된 문장이어야 합니다.
+- 퀴즈(quizzes):
+    1. OX 문제(1번): 인도자 해설 내용을 활용해 출제. 정답은 반드시 "O" 또는 "X"
+    2. 단답형 문제(2번): 포인트의 핵심 키워드를 정답으로 설정.
+    3. 서술형 문제(3번): 열린 나눔 질문이 아니라, 본문이 말하는 의미/결과/경고/바른 반응을 짧게 답할 수 있는 문제로 출제. 정답은 null이 아니라 1~2문장의 짧은 모범답안으로 작성.
+- 모든 questionText는 짧고 바로 이해 가능해야 합니다.
+    - 가능하면 1문장으로 작성하고, 불필요한 배경 설명 없이 핵심만 물어보세요.
+    - "OBS 자료에서", "포인트 1에서", "본문을 보면", "다음을 통해", "어떤 내용을 확인했을 때" 같은 메타 표현은 사용하지 마세요.
+    - 질문만 읽어도 바로 의미가 전달되도록 핵심 주어와 개념을 직접 넣으세요.
+    - 너무 길게 쓰지 말고, 읽기 쉬운 짧은 문장으로 작성하세요.
+- 3번 서술형은 다음 기준을 반드시 지키세요.
+    - "나누어 봅시다", "생각해 봅시다", "어떻게 느끼나요" 같은 열린 질문 표현은 금지합니다.
+    - 사용자가 답을 적은 뒤 정답 보기에서 내용을 다시 복습할 수 있어야 합니다.
+    - correctAnswer에는 짧은 모범답안을, explanation에는 그 답의 근거를 짧게 보충하세요.
+- 각 퀴즈는 짧고 명확한 해설(explanation)을 반드시 포함해야 합니다.
 
-출력 형식은 반드시 아래 JSON 배열 구조로만 응답하세요. 설명이나 추가 텍스트 없이 JSON만 출력하세요.
+출력 형식은 반드시 아래 JSON 구조로만 응답하세요. 설명이나 추가 텍스트 없이 JSON만 출력하세요.
 
 JSON 구조 예시:
-[
-  {
-    "stepNumber": 1,
-    "questionType": "OX",
-    "questionText": "문제 내용...",
-    "correctAnswer": "O",
-    "explanation": "해당 정답의 근거가 되는 성경적 배경이나 해설..."
-  },
-  {
-    "stepNumber": 2,
-    "questionType": "SHORT",
-    "questionText": "문제 내용...",
-    "correctAnswer": "정답단어",
-    "explanation": "이 단어가 핵심인 이유와 본문의 맥락 설명..."
-  },
-  {
-    "stepNumber": 3,
-    "questionType": "ESSAY",
-    "questionText": "적용 질문 내용...",
-    "correctAnswer": null,
-    "explanation": "이 질문을 통해 묵상해볼 점이나 인도자 가이드..."
-  }
-]"""
+{
+  "summaries": [
+    "첫 번째 핵심 요약 문장...",
+    "두 번째 핵심 요약 문장...",
+    "세 번째 핵심 요약 문장..."
+  ],
+  "quizzes": [
+    {
+      "stepNumber": 1,
+      "questionType": "OX",
+      "questionText": "문제 내용...",
+      "correctAnswer": "O",
+      "explanation": "해설 내용..."
+    },
+    {
+      "stepNumber": 2,
+      "questionType": "SHORT",
+      "questionText": "문제 내용...",
+      "correctAnswer": "정답",
+      "explanation": "해설 내용..."
+    },
+    {
+      "stepNumber": 3,
+      "questionType": "ESSAY",
+      "questionText": "삶과 믿음에 어떤 영향이 생기나요?",
+      "correctAnswer": "은혜 받는 길이 막히고 죄의 열매를 맺게 되어 믿음이 무뎌집니다.",
+      "explanation": "가이드 내용..."
+    }
+  ]
+}"""
 
 
 def _build_point_summary(points: list) -> str:
@@ -69,7 +88,7 @@ def _clean_json_response(text: str) -> str:
     return text.strip()
 
 
-def generate_quizzes(sections: list) -> list:
+def generate_quizzes(sections: list) -> dict[str, list]:
     intro = next((s for s in sections if s["type"] == "intro"), None)
     points = [s for s in sections if s["type"] == "point"]
     application = next((s for s in sections if s["type"] == "application"), None)

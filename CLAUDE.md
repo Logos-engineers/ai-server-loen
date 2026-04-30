@@ -1,6 +1,6 @@
 # ai-service
 
-Python 3.12 / FastAPI. OBS PDF를 분석해서 sections + quizzes를 생성하는 AI 서비스.
+Python 3.12 / FastAPI. OBS PDF를 분석해서 sections + summary + quizzes를 생성하는 AI 서비스.
 루트 `CLAUDE.md`의 전체 아키텍처 개요를 먼저 참고할 것.
 
 ## 역할
@@ -13,7 +13,7 @@ Python 3.12 / FastAPI. OBS PDF를 분석해서 sections + quizzes를 생성하�
 ```
 POST /obs/process
   Request:  { "r2_key": "obs/<uuid>.pdf" }
-  Response: { "sections": [...], "quizzes": [...] }
+  Response: { "sections": [...], "summary": [...], "quizzes": [...] }
 
 GET /health
   Response: { "status": "ok" }
@@ -26,8 +26,8 @@ r2_key 수신
 → R2에서 PDF 바이트 다운로드 (r2_client.download_file)
 → pdfplumber로 텍스트 추출 (pdf_extractor)
 → Gemini로 sections 파싱 (parser)
-→ Gemini로 quizzes 생성 (quiz_generator)
-→ { sections, quizzes } 반환
+→ Gemini로 summaries + quizzes 생성 (quiz_generator)
+→ { sections, summary, quizzes } 반환
 ```
 
 ## Sections 스키마
@@ -70,7 +70,44 @@ r2_key 수신
 
 ## Quizzes 스키마
 
-항상 3개 고정 (stepNumber 1, 2, 3):
+AI 모델은 내부적으로 아래 구조를 생성한다:
+
+```json
+{
+  "summaries": [
+    "첫 번째 핵심 요약 문장...",
+    "두 번째 핵심 요약 문장...",
+    "세 번째 핵심 요약 문장..."
+  ],
+  "quizzes": [
+    {
+      "stepNumber": 1,
+      "questionType": "OX",
+      "questionText": "문제...",
+      "correctAnswer": "O",
+      "explanation": "해설..."
+    },
+    {
+      "stepNumber": 2,
+      "questionType": "SHORT",
+      "questionText": "문제...",
+      "correctAnswer": "핵심단어",
+      "explanation": "해설..."
+    },
+    {
+      "stepNumber": 3,
+      "questionType": "ESSAY",
+      "questionText": "삶과 믿음에 어떤 영향이 생기나요?",
+      "correctAnswer": "은혜 받는 길이 막히고 죄의 열매를 맺게 되어 믿음이 무뎌집니다.",
+      "explanation": "인도자 가이드..."
+    }
+  ]
+}
+```
+
+라우터 응답에서는 `summaries`를 `summary` 필드로 매핑한다.
+
+`quizzes`는 항상 3개 고정 (stepNumber 1, 2, 3):
 
 ```json
 [
@@ -91,13 +128,14 @@ r2_key 수신
   {
     "stepNumber": 3,
     "questionType": "ESSAY",
-    "questionText": "적용 질문...",
-    "correctAnswer": null,
+    "questionText": "삶과 믿음에 어떤 영향이 생기나요?",
+    "correctAnswer": "은혜 받는 길이 막히고 죄의 열매를 맺게 되어 믿음이 무뎌집니다.",
     "explanation": "인도자 가이드..."
   }
 ]
 ```
 
+`summary`는 항상 3줄을 기대한다.
 백엔드 `ObsQuiz` entity의 `questionType` 필드에 그대로 저장됨 (String 타입).
 
 ## R2 Client
@@ -111,8 +149,8 @@ delete_file(key: str)
 
 ## AI 모델
 
-- 파서: `gemini-1.5-flash` (sections 구조화)
-- 퀴즈 생성: `gemini-1.5-flash` (3개 퀴즈 생성)
+- 파서: `gemini-2.5-flash` (sections 구조화)
+- 요약/퀴즈 생성: `gemini-2.5-flash` (3줄 요약 + 3개 퀴즈 생성)
 - 두 호출 모두 JSON 파싱 실패 시 1회 재시도
 
 ## Environment Variables
@@ -146,6 +184,6 @@ routers/obs.py       # POST /obs/process 엔드포인트
 services/
   pdf_extractor.py   # R2 다운로드 + pdfplumber 텍스트 추출
   parser.py          # Gemini로 sections 파싱
-  quiz_generator.py  # Gemini로 quizzes 생성
+  quiz_generator.py  # Gemini로 summaries + quizzes 생성
   r2_client.py       # boto3 R2 클라이언트
 ```

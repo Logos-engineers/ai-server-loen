@@ -87,10 +87,17 @@ def _build_point_summary(points: list) -> str:
     for p in points:
         answer = p.get("answer") or "( )"
         title_filled = p.get("title", "").replace("( )", answer)
-        commentary = (p.get("commentaries") or [None])[0] or "없음"
+        
+        # Sub-questions for context
+        q_lines = []
+        for q in p.get("questions", []):
+            q_text = q.get("text") if isinstance(q, dict) else q
+            if q_text:
+                q_lines.append(f"    - {q_text}")
+        
         lines.append(
             f"포인트 {p['number']}. \"{answer}\" — {title_filled} ({p.get('reference', '')})\n"
-            f"  인도자 해설: {commentary}"
+            + "\n".join(q_lines)
         )
     return "\n".join(lines)
 
@@ -110,6 +117,15 @@ def generate_quizzes(sections: list) -> dict[str, list]:
     points = [s for s in sections if s["type"] == "point"]
     application = next((s for s in sections if s["type"] == "application"), None)
 
+    # 적용 질문 텍스트 구성
+    app_text = "없음"
+    if application:
+        app_qs = application.get("questions", [])
+        if app_qs:
+            app_text = "\n".join([q.get("text", "") if isinstance(q, dict) else q for q in app_qs])
+        else:
+            app_text = application.get("text", "없음") # 하위 호환성
+
     user_prompt = f"""다음은 OBS 말씀의 핵심 내용입니다.
 이 내용을 바탕으로 다음 주 개인 복습용 퀴즈 3개를 생성해 주세요.
 
@@ -120,7 +136,7 @@ def generate_quizzes(sections: list) -> dict[str, list]:
 {_build_point_summary(points)}
 
 [적용 질문]
-{application["text"] if application else "없음"}"""
+{app_text}"""
 
     for attempt in range(2):
         try:

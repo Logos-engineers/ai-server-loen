@@ -84,19 +84,21 @@ JSON 구조 예시:
 
 def _build_point_summary(points: list) -> str:
     lines = []
-    for p in points:
+    for i, p in enumerate(points):
         answer = p.get("answer") or "( )"
         title_filled = p.get("title", "").replace("( )", answer)
         
-        # Sub-questions for context
+        # Sub-questions for context from 'items'
         q_lines = []
-        for q in p.get("questions", []):
-            q_text = q.get("text") if isinstance(q, dict) else q
-            if q_text:
-                q_lines.append(f"    - {q_text}")
+        # v2 uses 'items', v1 uses 'questions'
+        items = p.get("items") or p.get("questions") or []
+        for it in items:
+            it_text = it.get("text") if isinstance(it, dict) else it
+            if it_text:
+                q_lines.append(f"    - {it_text}")
         
         lines.append(
-            f"포인트 {p['number']}. \"{answer}\" — {title_filled} ({p.get('reference', '')})\n"
+            f"포인트 {p.get('number', i+1)}. \"{answer}\" — {title_filled} ({p.get('reference', '')})\n"
             + "\n".join(q_lines)
         )
     return "\n".join(lines)
@@ -120,9 +122,10 @@ def generate_quizzes(sections: list) -> dict[str, list]:
     # 적용 질문 텍스트 구성
     app_text = "없음"
     if application:
-        app_qs = application.get("questions", [])
-        if app_qs:
-            app_text = "\n".join([q.get("text", "") if isinstance(q, dict) else q for q in app_qs])
+        # v2 uses 'items', v1 uses 'questions'
+        app_items = application.get("items") or application.get("questions") or []
+        if app_items:
+            app_text = "\n".join([it.get("text", "") if isinstance(it, dict) else it for it in app_items])
         else:
             app_text = application.get("text", "없음") # 하위 호환성
 

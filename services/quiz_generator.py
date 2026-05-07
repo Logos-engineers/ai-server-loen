@@ -82,20 +82,42 @@ JSON 구조 예시:
 }"""
 
 
+def _flatten_tree_items(nodes: list, depth: int = 0) -> list[str]:
+    lines: list[str] = []
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+
+        text = node.get("text", "")
+        if text:
+            prefix = "  " * depth
+            number = node.get("number")
+            lines.append(f"{prefix}- {number + ' ' if number else ''}{text}")
+
+        for note in node.get("notes", []) or []:
+            if note:
+                prefix = "  " * (depth + 1)
+                lines.append(f"{prefix}* NOTE: {note}")
+
+        lines.extend(_flatten_tree_items(node.get("children", []) or [], depth + 1))
+    return lines
+
+
 def _build_point_summary(points: list) -> str:
     lines = []
     for i, p in enumerate(points):
         answer = p.get("answer") or "( )"
         title_filled = p.get("title", "").replace("( )", answer)
         
-        # Sub-questions for context from 'items'
         q_lines = []
-        # v2 uses 'items', v1 uses 'questions'
-        items = p.get("items") or p.get("questions") or []
-        for it in items:
-            it_text = it.get("text") if isinstance(it, dict) else it
-            if it_text:
-                q_lines.append(f"    - {it_text}")
+        items = p.get("items") or []
+        if items and isinstance(items[0], dict) and "children" in items[0]:
+            q_lines.extend([f"    {line}" for line in _flatten_tree_items(items)])
+        else:
+            for it in p.get("items") or p.get("questions") or []:
+                it_text = it.get("text") if isinstance(it, dict) else it
+                if it_text:
+                    q_lines.append(f"    - {it_text}")
         
         lines.append(
             f"포인트 {p.get('number', i+1)}. \"{answer}\" — {title_filled} ({p.get('reference', '')})\n"
@@ -122,9 +144,10 @@ def generate_quizzes(sections: list) -> dict[str, list]:
     # 적용 질문 텍스트 구성
     app_text = "없음"
     if application:
-        # v2 uses 'items', v1 uses 'questions'
         app_items = application.get("items") or application.get("questions") or []
-        if app_items:
+        if app_items and isinstance(app_items[0], dict) and "children" in app_items[0]:
+            app_text = "\n".join(_flatten_tree_items(app_items))
+        elif app_items:
             app_text = "\n".join([it.get("text", "") if isinstance(it, dict) else it for it in app_items])
         else:
             app_text = application.get("text", "없음") # 하위 호환성

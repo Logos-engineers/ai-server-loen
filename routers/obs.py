@@ -14,8 +14,10 @@ router = APIRouter()
 # 미설정 시(운영 오설정) 열려버리지 않도록 호출을 거부(fail-closed)한다.
 INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN")
 
-# 허용 R2 키 패턴 — obs/ 접두사 + 단일 세그먼트 + .pdf. 경로 탈출/임의 객체 열람 차단.
-_R2_KEY_PATTERN = re.compile(r"^obs/[A-Za-z0-9._-]+\.pdf$")
+# 허용 R2 키 패턴 — (선택적 환경 prefix 1세그먼트) + obs/ + 단일 파일명 + .pdf.
+# 백엔드 StorageService가 환경별 key-prefix(dev="dev/", prod="")를 붙이므로
+# dev/obs/<uuid>.pdf 형태도 허용한다. prefix 세그먼트엔 점(.) 불가 → 경로 탈출 차단.
+_R2_KEY_PATTERN = re.compile(r"^([A-Za-z0-9_-]+/)?obs/[A-Za-z0-9._-]+\.pdf$")
 
 
 def verify_internal_token(x_internal_token: str | None):

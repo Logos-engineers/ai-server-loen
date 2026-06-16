@@ -162,7 +162,11 @@ CLOUDFLARE_ACCOUNT_ID=
 R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
 R2_BUCKET_NAME=
+INTERNAL_API_TOKEN=   # 백엔드 중계 인증용 공유 시크릿 (백엔드 AI_INTERNAL_TOKEN과 동일 값). 미설정 시 /obs/process 503 거부
 ```
+
+> ⚠️ `/obs/process`는 `X-Internal-Token` 헤더가 `INTERNAL_API_TOKEN`과 일치해야만 동작한다(내부 전용).
+> 토큰 미설정이면 fail-closed로 503을 반환한다 — 로컬·운영 모두 반드시 설정할 것.
 
 ## Run
 

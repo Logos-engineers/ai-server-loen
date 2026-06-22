@@ -20,7 +20,8 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, ARM64]   # 라즈베리파이 (ai-server-loen 러너)
+    runs-on: self-hosted            # 라즈베리파이 (ai-server-loen 러너) — 백엔드와 동일
+
     steps:
       - uses: actions/checkout@v4
 

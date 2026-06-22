@@ -1,0 +1,79 @@
+name: Deploy AI Service to Raspberry Pi
+
+# dev 브랜치 → 라즈베리파이 dev 서버에 ai-service(Docker) 재배포.
+# ARM64 이미지라 빌드는 Pi(self-hosted 러너)에서 직접 수행한다.
+# env 는 repo Secrets 로 주입한다(임시 파일 생성 → 사용 → 삭제).
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'services/**'
+      - 'routers/**'
+      - 'main.py'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - '.github/workflows/deploy-ai.yml'
+
+concurrency:
+  group: deploy-ai
+  cancel-in-progress: false        # 배포는 중간 취소하지 않고 큐잉
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, ARM64]   # 라즈베리파이 (ai-server-loen 러너)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t loen-ai:dev .
+
+      # Secrets 를 env 로 받아 --env-file 용 파일에 그대로 기록한다.
+      # (heredoc 대신 env+echo: 시크릿 값의 $ 등 특수문자 셸 확장 방지)
+      - name: Write env file from secrets
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          INTERNAL_API_TOKEN: ${{ secrets.INTERNAL_API_TOKEN }}
+          # 선택: repo Variable 로 끄기 가능(미설정=빈값=코드 기본값 켜짐)
+          ENABLE_SECTION_REFINE: ${{ vars.ENABLE_SECTION_REFINE }}
+        run: |
+          umask 077
+          {
+            echo "GEMINI_API_KEY=$GEMINI_API_KEY"
+            echo "CLOUDFLARE_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID"
+            echo "R2_ACCESS_KEY_ID=$R2_ACCESS_KEY_ID"
+            echo "R2_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY"
+            echo "R2_BUCKET_NAME=$R2_BUCKET_NAME"
+            echo "INTERNAL_API_TOKEN=$INTERNAL_API_TOKEN"
+            echo "ENABLE_SECTION_REFINE=${ENABLE_SECTION_REFINE:-true}"
+          } > "$RUNNER_TEMP/ai.env"
+
+      - name: Restart container
+        run: |
+          # 8000 포트를 점유한 기존 컨테이너를 이름과 무관하게 제거(첫 교체 안전).
+          docker ps -q --filter "publish=8000" | xargs -r docker rm -f
+          docker rm -f loen-ai 2>/dev/null || true
+          docker run -d --name loen-ai --restart unless-stopped \
+            -p 8000:8000 --env-file "$RUNNER_TEMP/ai.env" loen-ai:dev
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "✅ ai-service 기동 확인 (http $code)"; exit 0
+            fi
+            echo "대기중... ($i/10) http=$code"; sleep 3
+          done
+          echo "⚠️ health check 실패 — 최근 컨테이너 로그:"
+          docker logs --tail 50 loen-ai 2>&1 || true
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/ai.env"
+          docker image prune -f >/dev/null 2>&1 || true

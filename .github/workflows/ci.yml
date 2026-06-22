@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [main, dev]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12' # Dockerfile(python:3.12-slim)에 맞춤
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Syntax check
+        run: python -m compileall -q main.py routers services
+
+      - name: Import smoke test (boots app object)
+        # 더미 env — 모듈 import 시점에 genai.configure()/boto3.client()가
+        # 실행되므로 값이 필요하지만, 네트워크 호출은 없어 실 시크릿은 불필요.
+        env:
+          GEMINI_API_KEY: dummy
+          CLOUDFLARE_ACCOUNT_ID: dummy
+          R2_ACCESS_KEY_ID: dummy
+          R2_SECRET_ACCESS_KEY: dummy
+          R2_BUCKET_NAME: dummy
+          INTERNAL_API_TOKEN: dummy
+        run: python -c "import main; print('app import OK:', main.app.title)"

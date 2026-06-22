@@ -25,10 +25,15 @@ GET /health
 r2_key 수신
 → R2에서 PDF 바이트 다운로드 (r2_client.download_file)
 → pdfplumber로 텍스트 추출 (pdf_extractor)
-→ Gemini로 sections 파싱 (parser)
+→ 규칙 기반 파서로 sections 구조화 (parser, 정규식 — LLM 아님)
+→ AI로 sections 후보정 (section_refiner, 텍스트 끊김·계층 오류 교정 — 실패 시 초안 폴백)
 → Gemini로 summaries + quizzes 생성 (quiz_generator)
 → { sections, summary, quizzes } 반환
 ```
+
+> ⚠️ **parser는 LLM이 아니라 정규식 규칙 기반**이다. 특정 OBS 양식("III. 말씀 정리하기",
+> "IV. 적용하기", `1.`/`(1)`/`①`/`▶` 등)에 의존한다. 그 뒤 `section_refiner`가 Gemini로
+> 구조 오류만 후보정한다(글자는 원문 보존, number는 시스템이 결정적으로 재계산).
 
 ## Sections 스키마
 
@@ -149,9 +154,9 @@ delete_file(key: str)
 
 ## AI 모델
 
-- 파서: `gemini-2.5-flash` (sections 구조화)
-- 요약/퀴즈 생성: `gemini-2.5-flash` (3줄 요약 + 3개 퀴즈 생성)
-- 두 호출 모두 JSON 파싱 실패 시 1회 재시도
+- 파서(parser): **LLM 아님 — 정규식 규칙 기반** sections 구조화
+- 후보정(section_refiner): `gemini-2.5-flash` — 규칙 파서 초안의 구조 오류(텍스트 끊김·계층)만 교정. `response_mime_type=application/json` structured output. 실패/내용유실 시 초안 폴백
+- 요약/퀴즈 생성(quiz_generator): `gemini-2.5-flash` (3줄 요약 + 3개 퀴즈 생성). JSON 파싱 실패 시 1회 재시도
 
 ## Environment Variables
 
@@ -163,6 +168,7 @@ R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
 R2_BUCKET_NAME=
 INTERNAL_API_TOKEN=   # 백엔드 중계 인증용 공유 시크릿 (백엔드 AI_INTERNAL_TOKEN과 동일 값). 미설정 시 /obs/process 503 거부
+ENABLE_SECTION_REFINE=true   # (선택) sections AI 후보정 on/off. 기본 켜짐, 끄려면 false (kill switch)
 ```
 
 > ⚠️ `/obs/process`는 `X-Internal-Token` 헤더가 `INTERNAL_API_TOKEN`과 일치해야만 동작한다(내부 전용).
@@ -186,8 +192,9 @@ docker run -p 8000:8000 --env-file .env loen-ai
 main.py              # FastAPI app, /obs 라우터 등록
 routers/obs.py       # POST /obs/process 엔드포인트
 services/
-  pdf_extractor.py   # R2 다운로드 + pdfplumber 텍스트 추출
-  parser.py          # Gemini로 sections 파싱
-  quiz_generator.py  # Gemini로 summaries + quizzes 생성
-  r2_client.py       # boto3 R2 클라이언트
+  pdf_extractor.py    # R2 다운로드 + pdfplumber 텍스트 추출
+  parser.py           # 규칙(정규식) 기반 sections 구조화 (LLM 아님)
+  section_refiner.py  # Gemini로 sections 구조 오류 후보정 (실패 시 초안 폴백)
+  quiz_generator.py   # Gemini로 summaries + quizzes 생성
+  r2_client.py        # boto3 R2 클라이언트
 ```

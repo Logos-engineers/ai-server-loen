@@ -6,6 +6,7 @@ import traceback
 import sys
 from services.pdf_extractor import extract_text_from_r2
 from services.parser import parse_obs_sections
+from services.section_refiner import refine_sections
 from services.quiz_generator import generate_quizzes
 
 router = APIRouter()
@@ -52,8 +53,11 @@ def process_obs(request: ProcessRequest, x_internal_token: str | None = Header(d
 
         print(f"[AI] Extracted text length: {len(pdf_text)}", file=sys.stderr)
         sections = parse_obs_sections(pdf_text)
-
         print(f"[AI] Parsed sections count: {len(sections)}", file=sys.stderr)
+
+        # 규칙 파서 초안을 AI로 후보정(텍스트 끊김·계층 오류 교정). 실패 시 초안 그대로.
+        sections = refine_sections(pdf_text, sections)
+        print(f"[AI] Refined sections count: {len(sections)}", file=sys.stderr)
 
         # generate_quizzes 결과가 dict인지 list인지에 따라 처리
         ai_result = generate_quizzes(sections)

@@ -22,7 +22,12 @@ from services.parser import _assign_numbers
 
 # quiz_generator.py와 동일하게 import 시점에 구성(키 없으면 generate 시점에만 실패).
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-_model = genai.GenerativeModel("gemini-2.5-flash")
+# 후보정은 '기계적 재구조화'라 경량 모델로 충분하고, flash(thinking)는 이 작업에
+# 60~100s씩 걸려 analyze 전체를 타임아웃시켰다(QA). flash-lite로 지연을 크게 낮춘다.
+_model = genai.GenerativeModel("gemini-2.5-flash-lite")
+
+# 후보정 Gemini 호출 상한(초). 초과 시 예외→초안 폴백. 본 파이프라인을 길게 막지 않는다.
+_REFINE_TIMEOUT_SEC = 40
 
 _VALID_TYPES = {"intro", "point", "application"}
 
@@ -172,6 +177,7 @@ def refine_sections(pdf_text: str, sections: list[dict[str, Any]]) -> list[dict[
         response = _model.generate_content(
             prompt,
             generation_config={"response_mime_type": "application/json", "temperature": 0},
+            request_options={"timeout": _REFINE_TIMEOUT_SEC},
         )
         raw = json.loads(_clean_json(response.text))
         if isinstance(raw, dict) and "sections" in raw:

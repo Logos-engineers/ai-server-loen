@@ -38,6 +38,52 @@ flowchart LR
     class D,E ai;
 ```
 
+### 전체 시퀀스 (백엔드 중계 포함)
+
+위 파이프라인이 백엔드·R2·Gemini와 어떻게 주고받는지를 시간 순서로 본 흐름입니다.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as 관리자
+    participant BE as Backend (Spring Boot)
+    participant R2 as Cloudflare R2
+    participant AI as ai-service (FastAPI)
+    participant LLM as Gemini API
+    participant DB as PostgreSQL
+
+    rect rgb(238, 243, 255)
+    Note over Admin,R2: ① PDF 업로드
+    Admin->>BE: 교안 PDF 업로드
+    BE->>R2: 파일 저장
+    R2-->>BE: r2Key
+    BE-->>Admin: r2Key (업로드 완료)
+    end
+
+    rect rgb(240, 247, 241)
+    Note over Admin,LLM: ② AI 분석 파이프라인
+    Admin->>BE: AI 분석 요청 (r2Key)
+    BE->>AI: POST /obs/process (X-Internal-Token, r2_key)
+    AI->>AI: 내부 토큰 검증 (미설정/불일치 시 503·401 거부)
+    AI->>R2: PDF 직접 다운로드
+    R2-->>AI: PDF bytes
+    AI->>AI: 텍스트 추출(pdfplumber) + 규칙 파서(정규식)
+    AI->>LLM: 섹션 구조 후보정 (flash-lite)
+    LLM-->>AI: 보정 결과 (검증 실패·70%↓ 유실 시 규칙 초안 폴백)
+    AI->>LLM: 요약 + 복습 퀴즈 생성 (flash)
+    LLM-->>AI: summary + quizzes
+    AI-->>BE: sections · summary · quizzes (JSON)
+    end
+
+    rect rgb(253, 244, 227)
+    Note over Admin,DB: ③ 검토 후 저장
+    BE-->>Admin: 분석 결과 (검토용)
+    Admin->>BE: 검토·수정 후 저장
+    BE->>DB: 콘텐츠 + 퀴즈 저장
+    BE-->>Admin: 완료
+    end
+```
+
 ## 핵심 설계
 
 - **🧩 규칙 + AI 하이브리드 파싱** — 섹션 구조는 먼저 **정규식 규칙 파서**로 초안을 만들고

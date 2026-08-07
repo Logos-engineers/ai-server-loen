@@ -142,7 +142,8 @@ def _clean_json_response(text: str) -> str:
     return text.strip()
 
 
-def generate_quizzes(sections: list) -> dict[str, list]:
+def _build_material_context(sections: list) -> str:
+    """sections를 [본문 배경]/[핵심 포인트]/[적용 질문] 블록 텍스트로 변환. 생성·재생성 공용."""
     intro = next((s for s in sections if s["type"] == "intro"), None)
     points = [s for s in sections if s["type"] == "point"]
     application = next((s for s in sections if s["type"] == "application"), None)
@@ -158,10 +159,7 @@ def generate_quizzes(sections: list) -> dict[str, list]:
         else:
             app_text = application.get("text", "없음") # 하위 호환성
 
-    user_prompt = f"""다음은 OBS 말씀의 핵심 내용입니다.
-이 내용을 바탕으로 다음 주 개인 복습용 퀴즈 3개를 생성해 주세요.
-
-[본문 배경]
+    return f"""[본문 배경]
 {intro["text"] if intro else "없음"}
 
 [핵심 포인트]
@@ -169,6 +167,13 @@ def generate_quizzes(sections: list) -> dict[str, list]:
 
 [적용 질문]
 {app_text}"""
+
+
+def generate_quizzes(sections: list) -> dict[str, list]:
+    user_prompt = f"""다음은 OBS 말씀의 핵심 내용입니다.
+이 내용을 바탕으로 다음 주 개인 복습용 퀴즈 3개를 생성해 주세요.
+
+{_build_material_context(sections)}"""
 
     for attempt in range(2):
         try:
@@ -179,3 +184,69 @@ def generate_quizzes(sections: list) -> dict[str, list]:
                 raise RuntimeError(f"퀴즈 생성 실패: {e}")
 
     return []
+
+
+# 단계 → (questionType, 사람이 읽는 유형명). 재생성 시 유형은 이 단계에 고정된다.
+_STEP_TYPES = {
+    1: ("OX", "OX(참/거짓)"),
+    2: ("SHORT", "단답형"),
+    3: ("ESSAY", "짧은 서술형"),
+}
+
+
+def regenerate_single_quiz(
+    sections: list,
+    step_number: int,
+    current_question: str | None = None,
+    instruction: str | None = None,
+    other_questions: list[str] | None = None,
+) -> dict:
+    """검수 화면에서 특정 문제 1개만 다시 생성한다. 유형(step)은 고정, 나머지 문제와 중복 회피,
+    관리자가 적은 지침(instruction)을 함께 반영한다. 퀴즈 dict 1개를 반환."""
+    if step_number not in _STEP_TYPES:
+        raise ValueError(f"invalid step_number: {step_number}")
+    q_type, type_label = _STEP_TYPES[step_number]
+
+    avoid_lines = []
+    if current_question:
+        avoid_lines.append(f'- 지금 문제(같은 걸 다시 내지 말고 새롭게): "{current_question}"')
+    for oq in other_questions or []:
+        if oq:
+            avoid_lines.append(f'- 다른 문제와 겹치지 마세요: "{oq}"')
+    avoid_block = ("\n".join(avoid_lines)) if avoid_lines else "- (없음)"
+
+    instruction_block = (
+        f"\n[관리자 요청 — 반드시 반영]\n{instruction.strip()}"
+        if instruction and instruction.strip()
+        else ""
+    )
+
+    user_prompt = f"""다음은 OBS 말씀의 핵심 내용입니다.
+아래 기준(위 시스템 지침)을 그대로 지키되, **{step_number}번 문제({type_label})만 1개** 새로 만들어 주세요.
+questionType은 반드시 "{q_type}"이어야 합니다.
+
+{_build_material_context(sections)}
+
+[피해야 할 문제]
+{avoid_block}{instruction_block}
+
+출력은 아래 JSON "하나만" 반환하세요(설명·추가 텍스트 없이):
+{{"stepNumber": {step_number}, "questionType": "{q_type}", "questionText": "...", "correctAnswer": "...", "explanation": "..."}}"""
+
+    last_err = None
+    for attempt in range(2):
+        try:
+            response = model.generate_content(f"{SYSTEM_PROMPT}\n\n{user_prompt}")
+            data = json.loads(_clean_json_response(response.text))
+            # 모델이 배열/래핑으로 줄 수 있으니 방어적으로 단일 dict로 정규화
+            if isinstance(data, dict) and "quizzes" in data and data["quizzes"]:
+                data = data["quizzes"][0]
+            if isinstance(data, list):
+                data = data[0]
+            data["stepNumber"] = step_number
+            data["questionType"] = q_type  # 유형은 코드가 고정
+            return data
+        except Exception as e:
+            last_err = e
+
+    raise RuntimeError(f"문제 재생성 실패: {last_err}")

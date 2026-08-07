@@ -7,7 +7,7 @@ import sys
 from services.pdf_extractor import extract_text_from_r2
 from services.parser import parse_obs_sections
 from services.section_refiner import refine_sections
-from services.quiz_generator import generate_quizzes
+from services.quiz_generator import generate_quizzes, regenerate_single_quiz
 
 router = APIRouter()
 
@@ -80,3 +80,44 @@ def process_obs(request: ProcessRequest, x_internal_token: str | None = Header(d
         print(f"[AI] ERROR: {str(e)}", file=sys.stderr)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="processing_failed")
+
+
+class RegenerateQuizRequest(BaseModel):
+    sections: list
+    step_number: int
+    current_question: str | None = None
+    instruction: str | None = None
+    other_questions: list[str] | None = None
+
+
+class RegenerateQuizResponse(BaseModel):
+    quiz: dict
+
+
+@router.post("/regenerate-quiz", response_model=RegenerateQuizResponse)
+def regenerate_quiz(request: RegenerateQuizRequest, x_internal_token: str | None = Header(default=None)):
+    """검수 화면에서 특정 문제(step) 1개만 다시 생성. 유형 고정 + 관리자 지침 반영 + 중복 회피.
+    백엔드가 저장된 sections를 실어 중계하므로 콘텐츠 저장 여부와 무관하게 동작한다."""
+    verify_internal_token(x_internal_token)
+
+    if request.step_number not in (1, 2, 3):
+        raise HTTPException(status_code=400, detail="invalid_step_number")
+    if not request.sections:
+        raise HTTPException(status_code=400, detail="empty_sections")
+
+    try:
+        print(f"[AI] Regenerate quiz step={request.step_number}", file=sys.stderr)
+        quiz = regenerate_single_quiz(
+            sections=request.sections,
+            step_number=request.step_number,
+            current_question=request.current_question,
+            instruction=request.instruction,
+            other_questions=request.other_questions,
+        )
+        return RegenerateQuizResponse(quiz=quiz)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AI] ERROR (regenerate): {str(e)}", file=sys.stderr)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="regenerate_failed")

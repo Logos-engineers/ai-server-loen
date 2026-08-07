@@ -193,6 +193,35 @@ _STEP_TYPES = {
     3: ("ESSAY", "짧은 서술형"),
 }
 
+# 유형별 포맷 잠금 문구 — SYSTEM_PROMPT가 3개 유형(OX 먼저)을 함께 설명해, 단건 재생성 시
+# 엉뚱한 유형(예: 2번인데 OX 참/거짓 문장)이 새는 것을 첫 시도부터 막는다.
+_TYPE_LOCKS = {
+    "OX": '이 문제는 참/거짓을 묻는 OX 문장이어야 하며, correctAnswer는 정확히 "O" 또는 "X"여야 합니다.',
+    "SHORT": (
+        "이 문제는 단답형입니다. 절대 참/거짓(OX) 문장으로 만들지 마세요. "
+        "'무엇일까요?' 또는 빈칸(______) 형태로 물어 낱말 하나로 답하게 하고, "
+        'correctAnswer는 "O"/"X"가 아니라 실제 낱말이어야 합니다.'
+    ),
+    "ESSAY": "이 문제는 짧은 서술형입니다. OX·단답이 아니라 한두 문장으로 생각을 정리하게 하고, correctAnswer는 모범답안 문장입니다.",
+}
+
+
+def _validate_quiz_type(quiz: dict, q_type: str) -> bool:
+    """생성 결과가 기대 유형과 실제로 맞는지(라벨이 아니라 내용/정답 기준) 검증."""
+    ans = (quiz.get("correctAnswer") or "").strip()
+    question = (quiz.get("questionText") or "").strip()
+    if not question:
+        return False
+    upper = ans.upper()
+    if q_type == "OX":
+        return upper in ("O", "X")
+    if q_type == "SHORT":
+        # 단답형인데 정답이 O/X면 실제로는 OX형이 샌 것 → 거부
+        return bool(ans) and upper not in ("O", "X")
+    if q_type == "ESSAY":
+        return bool(ans)
+    return True
+
 
 def regenerate_single_quiz(
     sections: list,
@@ -202,7 +231,8 @@ def regenerate_single_quiz(
     other_questions: list[str] | None = None,
 ) -> dict:
     """검수 화면에서 특정 문제 1개만 다시 생성한다. 유형(step)은 고정, 나머지 문제와 중복 회피,
-    관리자가 적은 지침(instruction)을 함께 반영한다. 퀴즈 dict 1개를 반환."""
+    관리자가 적은 지침(instruction)을 함께 반영한다. 생성 결과가 기대 유형과 맞는지 검증하고
+    맞을 때까지 재시도(최대 3회) — 끝내 실패하면 예외. 퀴즈 dict 1개를 반환."""
     if step_number not in _STEP_TYPES:
         raise ValueError(f"invalid step_number: {step_number}")
     q_type, type_label = _STEP_TYPES[step_number]
@@ -225,6 +255,9 @@ def regenerate_single_quiz(
 아래 기준(위 시스템 지침)을 그대로 지키되, **{step_number}번 문제({type_label})만 1개** 새로 만들어 주세요.
 questionType은 반드시 "{q_type}"이어야 합니다.
 
+[유형 규칙 — 반드시 준수]
+{_TYPE_LOCKS[q_type]}
+
 {_build_material_context(sections)}
 
 [피해야 할 문제]
@@ -234,7 +267,7 @@ questionType은 반드시 "{q_type}"이어야 합니다.
 {{"stepNumber": {step_number}, "questionType": "{q_type}", "questionText": "...", "correctAnswer": "...", "explanation": "..."}}"""
 
     last_err = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             response = model.generate_content(f"{SYSTEM_PROMPT}\n\n{user_prompt}")
             data = json.loads(_clean_json_response(response.text))
@@ -244,8 +277,13 @@ questionType은 반드시 "{q_type}"이어야 합니다.
             if isinstance(data, list):
                 data = data[0]
             data["stepNumber"] = step_number
-            data["questionType"] = q_type  # 유형은 코드가 고정
-            return data
+            data["questionType"] = q_type  # 유형 라벨은 코드가 고정
+            # 라벨만 고정하면 'OX 내용 + SHORT 라벨'이 새므로, 내용/정답으로 유형을 검증
+            if _validate_quiz_type(data, q_type):
+                return data
+            last_err = RuntimeError(
+                f"유형 불일치(기대 {q_type}, 정답={data.get('correctAnswer')!r})"
+            )
         except Exception as e:
             last_err = e
 

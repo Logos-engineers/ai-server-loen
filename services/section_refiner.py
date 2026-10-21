@@ -18,7 +18,7 @@ import os
 import sys
 from typing import Any
 
-from services.parser import _assign_numbers
+from services.parser import _assign_numbers, check_gate
 
 # quiz_generator.py와 동일하게 import 시점에 구성(키 없으면 generate 시점에만 실패).
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -202,6 +202,13 @@ def refine_sections(pdf_text: str, sections: list[dict[str, Any]]) -> list[dict[
         refined_intro = next((x.get("text", "") for x in refined if x.get("type") == "intro"), "")
         if any(h in refined_intro and h not in draft_intro for h in _HEADER_MARKERS):
             print("[AI] section refine rejected: header leaked into intro, using draft", file=sys.stderr)
+            return sections
+        # 원문 줄 단위 누락 가드: 총량 가드(70%)를 통과해도 해설·하위질문 수십 줄을 지우는 경우가 있다
+        # (8/23 교안: 초안 누락 0 → 교정본 21줄, 참여자에게 보이는 "2-1." 질문 포함).
+        draft_missing = len(check_gate(pdf_text, sections)["missingLines"])
+        refined_missing = len(check_gate(pdf_text, refined)["missingLines"])
+        if refined_missing > draft_missing:
+            print(f"[AI] section refine rejected: missing lines {draft_missing}→{refined_missing}, using draft", file=sys.stderr)
             return sections
 
         return refined

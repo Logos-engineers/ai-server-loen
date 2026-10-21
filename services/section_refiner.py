@@ -33,6 +33,11 @@ _VALID_TYPES = {"intro", "point", "application"}
 
 # 내용 유실 가드: 교정본 텍스트 총량이 초안의 이 비율 미만이면 AI가 내용을 날린 것으로 보고 폴백.
 _MIN_VOLUME_RATIO = 0.7
+# 내용 증식 가드: 초안의 이 비율을 넘으면 폴백. 인도자 해설(notes)을 보이는 항목으로 복제·승격하면
+# 총량이 늘어난다(PoC 0405: 2097→4058자). 정상 교정은 끊고/합치기라 총량이 거의 그대로다.
+_MAX_VOLUME_RATIO = 1.3
+# intro에 문서 머리말이 들어가면 폴백(intro 오염 버그: 말씀정리 첫 칸에 설교 제목이 뜸).
+_HEADER_MARKERS = ("설교 제목", "성경 말씀", "III. 말씀 정리하기", "청년회 OBS 교재")
 
 
 def _refine_enabled() -> bool:
@@ -189,6 +194,14 @@ def refine_sections(pdf_text: str, sections: list[dict[str, Any]]) -> list[dict[
         draft_volume = _text_volume(sections)
         if draft_volume and _text_volume(refined) < draft_volume * _MIN_VOLUME_RATIO:
             print("[AI] section refine rejected: content shrank too much, using draft", file=sys.stderr)
+            return sections
+        if draft_volume and _text_volume(refined) > draft_volume * _MAX_VOLUME_RATIO:
+            print("[AI] section refine rejected: content grew too much, using draft", file=sys.stderr)
+            return sections
+        draft_intro = next((x.get("text", "") for x in sections if x.get("type") == "intro"), "")
+        refined_intro = next((x.get("text", "") for x in refined if x.get("type") == "intro"), "")
+        if any(h in refined_intro and h not in draft_intro for h in _HEADER_MARKERS):
+            print("[AI] section refine rejected: header leaked into intro, using draft", file=sys.stderr)
             return sections
 
         return refined

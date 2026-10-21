@@ -1,12 +1,67 @@
 import google.generativeai as genai
+import anthropic
 import json
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
 
+# 공급자: Claude 기본 → 실패 시 Gemini 폴백. 8개 교안 × 5개 모델 비교에서 Opus 5만 OX 정답 편향
+# (Gemini 2.5-flash는 O 7/8)이 해소됐다. docs/obs-quiz-model-comparison.html
+# QUIZ_PROVIDER=gemini 이거나 ANTHROPIC_API_KEY가 없으면 Gemini만 쓴다(키 넣기 전 배포해도 기존과 동일).
+CLAUDE_MODEL = "claude-opus-5"
+# 2.5 계열은 지원 종료 신호(2.5-pro가 이미 신규 사용자 404) → 버전 고정 가능한 최신 flash로.
+GEMINI_MODEL = "gemini-3.8-flash"
+
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel("gemini-2.5-flash")
+_gemini = genai.GenerativeModel(GEMINI_MODEL)
+_claude: anthropic.Anthropic | None = None  # 키 없는 환경(CI import 스모크 등)에서 import가 깨지지 않게 지연 생성
+
+
+def _providers() -> list[str]:
+    if os.getenv("QUIZ_PROVIDER", "claude").strip().lower() == "claude" and os.getenv("ANTHROPIC_API_KEY"):
+        return ["claude", "gemini"]
+    return ["gemini"]
+
+
+def _complete(provider: str, prompt: str) -> str:
+    global _claude
+    if provider == "gemini":
+        return _gemini.generate_content(prompt).text
+    if _claude is None:
+        _claude = anthropic.Anthropic(timeout=120.0)  # SDK가 429/5xx/연결 오류를 2회 자동 재시도
+    # 서버 측 폴백: 안전 분류기가 거절하면 같은 요청을 다른 Claude 모델로 재실행(분류별 자동 라우팅).
+    response = _claude.beta.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=16000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    if response.stop_reason == "refusal":
+        raise RuntimeError("claude refusal")
+    return "".join(b.text for b in response.content if b.type == "text")
+
+
+def _generate(prompt: str, parse, attempts: int) -> tuple[object, str]:
+    """공급자 순서대로 시도한다. parse가 예외를 던지면(JSON 깨짐·유형 불일치) 같은 공급자로
+    attempts회까지 재시도, 그래도 실패하거나 API 오류(크레딧 소진·인증·거절 포함)면 다음 공급자로.
+    반환: (parse 결과, 실제로 생성한 모델명)."""
+    last_err: Exception | None = None
+    for provider in _providers():
+        model_name = CLAUDE_MODEL if provider == "claude" else GEMINI_MODEL
+        for _ in range(attempts):
+            try:
+                return parse(_complete(provider, prompt)), model_name
+            except anthropic.APIError as e:
+                last_err = e
+                print(f"[AI] {model_name} API 오류({type(e).__name__}) → 다음 공급자", file=sys.stderr)
+                break  # 크레딧·인증(4xx)·SDK 재시도까지 소진한 5xx/연결 오류는 같은 공급자로 반복해도 소용없다
+            except Exception as e:
+                last_err = e
+                print(f"[AI] {model_name} 생성 실패: {e}", file=sys.stderr)
+    raise RuntimeError(f"모든 공급자 실패: {last_err}")
 
 SYSTEM_PROMPT = """당신은 기독교 청년 소그룹의 주일 말씀(OBS)을 가볍게 되새기도록 돕는 복습 도우미입니다.
 제공된 교안 내용을 바탕으로 (1) 그 주 말씀의 핵심 요약 3문장과 (2) 가볍게 복습할 퀴즈 3개(OX, 단답형, 짧은 서술형)를 생성하세요.
@@ -99,11 +154,6 @@ def _flatten_tree_items(nodes: list, depth: int = 0) -> list[str]:
             number = node.get("number")
             lines.append(f"{prefix}- {number + ' ' if number else ''}{text}")
 
-        for note in node.get("notes", []) or []:
-            if note:
-                prefix = "  " * (depth + 1)
-                lines.append(f"{prefix}* NOTE: {note}")
-
         lines.extend(_flatten_tree_items(node.get("children", []) or [], depth + 1))
     return lines
 
@@ -177,15 +227,15 @@ def generate_quizzes(sections: list) -> dict[str, list]:
 
 {_build_material_context(sections)}"""
 
-    for attempt in range(2):
-        try:
-            response = model.generate_content(f"{SYSTEM_PROMPT}\n\n{user_prompt}")
-            return json.loads(_clean_json_response(response.text))
-        except Exception as e:
-            if attempt == 1:
-                raise RuntimeError(f"퀴즈 생성 실패: {e}")
+    def parse(text: str) -> dict:
+        data = json.loads(_clean_json_response(text))
+        if not isinstance(data, dict) or len(data.get("quizzes") or []) != 3:
+            raise ValueError("퀴즈 3개 형식 아님")
+        return data
 
-    return []
+    data, model_name = _generate(f"{SYSTEM_PROMPT}\n\n{user_prompt}", parse, attempts=2)
+    data["generator"] = model_name
+    return data
 
 
 # 단계 → (questionType, 사람이 읽는 유형명). 재생성 시 유형은 이 단계에 고정된다.
@@ -269,25 +319,22 @@ questionType은 반드시 "{q_type}"이어야 합니다.
 출력은 아래 JSON "하나만" 반환하세요(설명·추가 텍스트 없이):
 {{"stepNumber": {step_number}, "questionType": "{q_type}", "questionText": "...", "correctAnswer": "...", "explanation": "..."}}"""
 
-    last_err = None
-    for attempt in range(3):
-        try:
-            response = model.generate_content(f"{SYSTEM_PROMPT}\n\n{user_prompt}")
-            data = json.loads(_clean_json_response(response.text))
-            # 모델이 배열/래핑으로 줄 수 있으니 방어적으로 단일 dict로 정규화
-            if isinstance(data, dict) and "quizzes" in data and data["quizzes"]:
-                data = data["quizzes"][0]
-            if isinstance(data, list):
-                data = data[0]
-            data["stepNumber"] = step_number
-            data["questionType"] = q_type  # 유형 라벨은 코드가 고정
-            # 라벨만 고정하면 'OX 내용 + SHORT 라벨'이 새므로, 내용/정답으로 유형을 검증
-            if _validate_quiz_type(data, q_type):
-                return data
-            last_err = RuntimeError(
-                f"유형 불일치(기대 {q_type}, 정답={data.get('correctAnswer')!r})"
-            )
-        except Exception as e:
-            last_err = e
+    def parse(text: str) -> dict:
+        data = json.loads(_clean_json_response(text))
+        # 모델이 배열/래핑으로 줄 수 있으니 방어적으로 단일 dict로 정규화
+        if isinstance(data, dict) and "quizzes" in data and data["quizzes"]:
+            data = data["quizzes"][0]
+        if isinstance(data, list):
+            data = data[0]
+        data["stepNumber"] = step_number
+        data["questionType"] = q_type  # 유형 라벨은 코드가 고정
+        # 라벨만 고정하면 'OX 내용 + SHORT 라벨'이 새므로, 내용/정답으로 유형을 검증
+        if not _validate_quiz_type(data, q_type):
+            raise ValueError(f"유형 불일치(기대 {q_type}, 정답={data.get('correctAnswer')!r})")
+        return data
 
-    raise RuntimeError(f"문제 재생성 실패: {last_err}")
+    try:
+        data, _ = _generate(f"{SYSTEM_PROMPT}\n\n{user_prompt}", parse, attempts=3)
+    except RuntimeError as e:
+        raise RuntimeError(f"문제 재생성 실패: {e}")
+    return data

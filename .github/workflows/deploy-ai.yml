@@ -38,6 +38,10 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           INTERNAL_API_TOKEN: ${{ secrets.INTERNAL_API_TOKEN }}
+          # 퀴즈 생성 Claude 키. 미설정이면 빈값 → 코드가 Gemini만 사용(기존 동작).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 선택: QUIZ_PROVIDER=gemini 로 Claude 끄기(미설정=코드 기본값 claude)
+          QUIZ_PROVIDER: ${{ vars.QUIZ_PROVIDER }}
           # 선택: repo Variable 로 끄기 가능(미설정=빈값=코드 기본값 켜짐)
           ENABLE_SECTION_REFINE: ${{ vars.ENABLE_SECTION_REFINE }}
         run: |
@@ -49,6 +53,8 @@ jobs:
             echo "R2_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY"
             echo "R2_BUCKET_NAME=$R2_BUCKET_NAME"
             echo "INTERNAL_API_TOKEN=$INTERNAL_API_TOKEN"
+            echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
+            echo "QUIZ_PROVIDER=${QUIZ_PROVIDER:-claude}"
             echo "ENABLE_SECTION_REFINE=${ENABLE_SECTION_REFINE:-true}"
           } > "$RUNNER_TEMP/ai.env"
 

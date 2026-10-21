@@ -26,7 +26,7 @@ GET /health
 
 ```
 r2_key 수신 (확장자로 분기)
-[.hwp] → pyhwp로 문단 추출 + 자동번호 복원 (hwp_extractor) → 규칙 파서 문단 모드 (refiner 없음)
+[.hwp] → 자체 HWP 리더로 문단 추출 + 자동번호 복원 (hwp_extractor) → 규칙 파서 문단 모드 (refiner 없음)
 [.pdf] → pdfplumber 텍스트 추출 (pdf_extractor) → 규칙 파서 → AI 후보정 (section_refiner, 이상 시 초안 폴백)
 → 게이트: 양식 검사 + 원문 누락 줄 검사 (parser.check_gate) · 메타데이터 추출 (parser.extract_meta)
 → summaries + quizzes 생성 (quiz_generator: Claude Opus 5 → 실패 시 Gemini 3.8 flash)
@@ -203,7 +203,7 @@ main.py              # FastAPI app, /obs 라우터 등록
 routers/obs.py       # POST /obs/process 엔드포인트
 services/
   pdf_extractor.py    # R2 다운로드 + pdfplumber 텍스트 추출
-  hwp_extractor.py    # pyhwp로 HWP 문단 추출 + 자동번호 복원
+  hwp_extractor.py    # HWP 5.0 공개 스펙 기반 자체 리더(olefile) — 문단 추출 + 자동번호 복원. HWP 5.x 일반 문서만(배포용·암호·.hwpx 미지원, 명확한 예외)
   parser.py           # 규칙(정규식) 기반 sections 구조화 (LLM 아님) + 메타데이터 + 게이트
   section_refiner.py  # Gemini로 sections 구조 오류 후보정 (PDF만, 이상 시 초안 폴백)
   quiz_generator.py   # Claude(→Gemini 폴백)로 summaries + quizzes 생성·재생성

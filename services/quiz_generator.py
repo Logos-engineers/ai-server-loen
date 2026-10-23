@@ -96,6 +96,9 @@ SYSTEM_PROMPT = """당신은 기독교 청년 소그룹의 주일 말씀(OBS)을
 - 1번 OX: 그 주 메시지/적용의 핵심을 쉽게 확인하는 참/거짓. 정답은 반드시 "O" 또는 "X". (이야기 사실 확인 금지)
 - 2번 빈칸 채우기(SHORT): **항상** 빈칸 채우기 형식으로 냅니다.
     · 교재 본문에 실제로 있는 문장(또는 핵심 표현)을 가져와, 그 주 메시지의 핵심어 한 자리를 빈칸 ______ (밑줄 6개)로 바꿉니다. 빈칸은 정확히 1개.
+    · 빈칸 위치 고르기: [빈칸 후보]가 주어지면 반드시 그중 하나를 정답으로 고르세요. 후보는 교재 저자가 괄호로 표시해 둔 핵심어입니다.
+      후보 중에서는 그 주 말씀의 중심 메시지를 담은 단어(포인트 제목·결론 문장에 나오는 단어)를 우선하고, 그 단어가 실제로 쓰인 교재 문장을 그대로 가져와 그 자리만 비우세요.
+    · 성경 구절 인용문(예: "~하리라 (히4:16)")을 빈칸 문장으로 쓰지 마세요. 구절 암기가 아니라 그 주 메시지를 떠올리는 문제여야 합니다.
     · 형식 예: "교재는 영원한 천국에 들어갈 사람을 '끝까지 ______ 성도'라고 표현했습니다. 빈칸에 들어갈 말은 무엇일까요?" → 정답 "견디는"
     · 정답은 빈칸 자리에 그대로 들어가는 한 단어(띄어쓰기 없음)이며, 교재 본문에 그 형태 그대로 나와야 합니다.
     · 앞뒤 문맥만 보고도 정답이 하나로 정해져야 합니다. 인물·지명·고유명사, 어느 설교에나 맞는 일반어(사랑, 은혜, 믿음처럼 문맥 없이도 찍을 수 있는 단어)는 피하세요.
@@ -225,11 +228,12 @@ def _build_material_context(sections: list) -> str:
 {app_text}"""
 
 
-def generate_quizzes(sections: list) -> dict[str, list]:
+def generate_quizzes(sections: list, title: str | None = None) -> dict[str, list]:
+    candidates = _blank_candidates(sections, title)
     user_prompt = f"""다음은 OBS 말씀의 핵심 내용입니다.
 이 내용을 바탕으로 다음 주 개인 복습용 퀴즈 3개를 생성해 주세요.
 
-{_build_material_context(sections)}"""
+{_build_material_context(sections)}{_candidates_block(candidates)}"""
 
     def parse(text: str) -> dict:
         data = json.loads(_clean_json_response(text))
@@ -243,7 +247,7 @@ def generate_quizzes(sections: list) -> dict[str, list]:
     # 2번은 항상 빈칸 채우기. 형식이 어긋나면 분석 전체를 다시 돌리지 않고 2번만 다시 만든다.
     quizzes = data["quizzes"]
     short = next((q for q in quizzes if q.get("stepNumber") == 2), None)
-    problem = _cloze_problem(short, _build_material_context(sections)) if short else None
+    problem = _cloze_problem(short, _build_material_context(sections), candidates, title) if short else None
     if problem:
         print(f"[AI] 2번 빈칸 형식 위반({problem}) → 2번만 재생성", file=sys.stderr)
         try:
@@ -251,6 +255,7 @@ def generate_quizzes(sections: list) -> dict[str, list]:
                 sections, 2,
                 current_question=short.get("questionText") if short else None,
                 other_questions=[q.get("questionText") for q in quizzes if q is not short],
+                title=title,
             )
             data["quizzes"] = [fixed if q is short else q for q in quizzes]
         except RuntimeError as e:
@@ -281,9 +286,29 @@ _TYPE_LOCKS = {
 
 
 _BLANK_RE = re.compile(r"_{3,}")
+# 인도자용 교재는 빈칸으로 의도한 핵심어를 "(환경)을 붙들고…", "새 (생명)의 길"처럼 괄호로 표시한다(양식 일치 188개 중 184개).
+_PAREN_WORD_RE = re.compile(r"\(([가-힣]{1,8})\)")
+# 문맥 없이도 찍을 수 있는 일반어 — 빈칸 후보에서 뺀다.
+_GENERIC_WORDS = {"하나님", "예수님", "예수", "주님", "성령", "믿음", "은혜", "사랑", "마음", "말씀", "교회", "나", "우리", "내"}
 
 
-def _cloze_problem(quiz: dict, material: str) -> str | None:
+def _blank_candidates(sections: list, title: str | None = None) -> list[str]:
+    """2번 빈칸 후보: 교재가 괄호로 표시한 핵심어 중 일반어·제목 단어를 뺀 것(등장 순서)."""
+    seen: list[str] = []
+    for w in _PAREN_WORD_RE.findall(_build_material_context(sections)):
+        if w in _GENERIC_WORDS or (title and w in title) or w in seen:
+            continue
+        seen.append(w)
+    return seen
+
+
+def _candidates_block(candidates: list[str]) -> str:
+    if not candidates:
+        return ""
+    return "\n\n[빈칸 후보 — 2번 정답은 반드시 이 중 하나]\n" + ", ".join(candidates)
+
+
+def _cloze_problem(quiz: dict, material: str, candidates: list[str] | None = None, title: str | None = None) -> str | None:
     """2번 빈칸 채우기 형식 검사. 문제가 없으면 None, 있으면 사유. 빈칸 표기는 ______로 통일한다."""
     question = quiz.get("questionText") or ""
     ans = (quiz.get("correctAnswer") or "").strip()
@@ -293,11 +318,15 @@ def _cloze_problem(quiz: dict, material: str) -> str | None:
         return f"정답이 한 단어가 아님({ans!r})"
     if material and re.sub(r"\s", "", ans) not in re.sub(r"\s", "", material):
         return f"정답이 교재 본문에 없음({ans!r})"
+    if title and ans in title:
+        return f"정답이 설교 제목에 포함({ans!r})"
+    if candidates and ans not in candidates:
+        return f"정답이 빈칸 후보 밖({ans!r})"
     quiz["questionText"] = _BLANK_RE.sub("______", question)
     return None
 
 
-def _validate_quiz_type(quiz: dict, q_type: str, material: str = "") -> bool:
+def _validate_quiz_type(quiz: dict, q_type: str, material: str = "", candidates: list[str] | None = None) -> bool:
     """생성 결과가 기대 유형과 실제로 맞는지(라벨이 아니라 내용/정답 기준) 검증."""
     ans = (quiz.get("correctAnswer") or "").strip()
     question = (quiz.get("questionText") or "").strip()
@@ -308,7 +337,7 @@ def _validate_quiz_type(quiz: dict, q_type: str, material: str = "") -> bool:
         return upper in ("O", "X")
     if q_type == "SHORT":
         # 단답형인데 정답이 O/X면 실제로는 OX형이 샌 것 → 거부. 형식은 항상 빈칸 채우기.
-        return bool(ans) and upper not in ("O", "X") and _cloze_problem(quiz, material) is None
+        return bool(ans) and upper not in ("O", "X") and _cloze_problem(quiz, material, candidates) is None
     if q_type == "ESSAY":
         return bool(ans)
     return True
@@ -320,6 +349,7 @@ def regenerate_single_quiz(
     current_question: str | None = None,
     instruction: str | None = None,
     other_questions: list[str] | None = None,
+    title: str | None = None,
 ) -> dict:
     """검수 화면에서 특정 문제 1개만 다시 생성한다. 유형(step)은 고정, 나머지 문제와 중복 회피,
     관리자가 적은 지침(instruction)을 함께 반영한다. 생성 결과가 기대 유형과 맞는지 검증하고
@@ -349,7 +379,7 @@ questionType은 반드시 "{q_type}"이어야 합니다.
 [유형 규칙 — 반드시 준수]
 {_TYPE_LOCKS[q_type]}
 
-{_build_material_context(sections)}
+{_build_material_context(sections)}{_candidates_block(_blank_candidates(sections, title)) if q_type == "SHORT" else ""}
 
 [피해야 할 문제]
 {avoid_block}{instruction_block}
@@ -367,7 +397,7 @@ questionType은 반드시 "{q_type}"이어야 합니다.
         data["stepNumber"] = step_number
         data["questionType"] = q_type  # 유형 라벨은 코드가 고정
         # 라벨만 고정하면 'OX 내용 + SHORT 라벨'이 새므로, 내용/정답으로 유형을 검증
-        if not _validate_quiz_type(data, q_type, _build_material_context(sections)):
+        if not _validate_quiz_type(data, q_type, _build_material_context(sections), _blank_candidates(sections, title)):
             raise ValueError(f"유형 불일치(기대 {q_type}, 정답={data.get('correctAnswer')!r})")
         return data
 

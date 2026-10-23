@@ -85,3 +85,16 @@ def test_bad_short_is_repaired_by_regenerating_step2_only(monkeypatch, calls):
     assert calls == ["claude", "claude"]  # 전체 1회 + 2번만 재생성 1회
     assert out["quizzes"][1]["questionText"] == fixed["questionText"]
     assert [q["stepNumber"] for q in out["quizzes"]] == [1, 2, 3]
+
+
+def test_blank_candidates_from_parenthesized_words():
+    secs = [{"type": "point", "number": 1, "title": "(환경)을 붙들면 망한다", "items": [
+        {"number": "(1)", "text": "새 (생명)의 길을 여신 (하나님)", "children": [], "notes": []},
+        {"number": "(2)", "text": "(관점)이 바뀐다", "children": [], "notes": []}]}]
+    # 일반어(하나님)와 제목 단어(관점)는 후보에서 뺀다
+    assert qg._blank_candidates(secs, title="믿음과 관점의 변화") == ["환경", "생명"]
+    material = qg._build_material_context(secs)
+    off = {"questionText": "______이 바뀐다", "correctAnswer": "관점"}
+    assert "제목" in qg._cloze_problem(dict(off), material, ["환경", "생명"], "믿음과 관점의 변화")
+    assert "후보 밖" in qg._cloze_problem({"questionText": "새 ______의 길", "correctAnswer": "길"}, material, ["환경", "생명"])
+    assert qg._cloze_problem({"questionText": "새 ______의 길", "correctAnswer": "생명"}, material, ["환경", "생명"]) is None

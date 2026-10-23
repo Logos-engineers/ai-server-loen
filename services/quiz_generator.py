@@ -2,6 +2,7 @@ import google.generativeai as genai
 import anthropic
 import json
 import os
+import re
 import sys
 from dotenv import load_dotenv
 
@@ -93,9 +94,12 @@ SYSTEM_PROMPT = """당신은 기독교 청년 소그룹의 주일 말씀(OBS)을
 【유형별 지침】
 - 요약(summaries): 교안 내용에 근거한 3개의 완성된 문장. 괄호·빈칸 없이.
 - 1번 OX: 그 주 메시지/적용의 핵심을 쉽게 확인하는 참/거짓. 정답은 반드시 "O" 또는 "X". (이야기 사실 확인 금지)
-- 2번 단답형(SHORT): 정답은 그 주 메시지의 "핵심 개념어" 한 단어(예: 순종, 은혜). 막연·일반적인 단어(존중, 사랑 등 어느 설교에나 맞는 단어)와 인물·지명·고유명사는 금지.
-    · 원칙 — 자연스러운 질문을 우선하세요. 질문을 읽으면 정답 단어가 자연스럽게 떠오르게 내고, 정답에 억지로 문제를 끼워맞추지 마세요. "~를 뜻하는 한 단어를 쓰세요" 같은 어색한 지시문 금지.
-    · 예외(애매할 때만) — 정답이 자연스럽게 하나로 특정되지 않는 경우에는, 교재 본문의 실제 문장에서 그 단어 자리에 빈칸(______)을 만들어 문맥으로 답이 정해지게 하세요(빈칸 채우기). 빈칸은 기본이 아니라, 이렇게 애매한 경우에만 쓰는 방식입니다.
+- 2번 빈칸 채우기(SHORT): **항상** 빈칸 채우기 형식으로 냅니다.
+    · 교재 본문에 실제로 있는 문장(또는 핵심 표현)을 가져와, 그 주 메시지의 핵심어 한 자리를 빈칸 ______ (밑줄 6개)로 바꿉니다. 빈칸은 정확히 1개.
+    · 형식 예: "교재는 영원한 천국에 들어갈 사람을 '끝까지 ______ 성도'라고 표현했습니다. 빈칸에 들어갈 말은 무엇일까요?" → 정답 "견디는"
+    · 정답은 빈칸 자리에 그대로 들어가는 한 단어(띄어쓰기 없음)이며, 교재 본문에 그 형태 그대로 나와야 합니다.
+    · 앞뒤 문맥만 보고도 정답이 하나로 정해져야 합니다. 인물·지명·고유명사, 어느 설교에나 맞는 일반어(사랑, 은혜, 믿음처럼 문맥 없이도 찍을 수 있는 단어)는 피하세요.
+    · 설교 제목에 그대로 들어 있는 단어는 정답으로 쓰지 마세요(제목만 보고 맞힐 수 있음).
 - 3번 짧은 서술형(ESSAY): 그 주 교재가 다룬 핵심 주제를 한 번 더 곱씹어 "생각해보게" 하는 질문. "내가 무엇을 다짐/적용하겠다" 같은 개인 결단형이 아니라, 교재 내용에 근거해 생각할 거리를 던지는 형식이어야 합니다.
     - 단, 너무 추상적·막연해 무엇이든 답이 되는 열린 질문은 금지. (나쁜 예: "신앙이란 무엇일까요?", "내가 적용하고 싶은 한 가지는?")
     - 좋은 예: "하나님께서 주신 은혜와 축복을 잘 지키기 위해 우리에게 필요한 것은 무엇일까요?" 처럼 교재가 답을 주는 구체적 주제.
@@ -127,8 +131,8 @@ JSON 구조 예시:
     {
       "stepNumber": 2,
       "questionType": "SHORT",
-      "questionText": "문제 내용...",
-      "correctAnswer": "정답",
+      "questionText": "교재는 ...을 '... ______ ...'라고 표현했습니다. 빈칸에 들어갈 말은 무엇일까요?",
+      "correctAnswer": "빈칸에 들어갈 한 단어",
       "explanation": "해설 내용..."
     },
     {
@@ -235,6 +239,23 @@ def generate_quizzes(sections: list) -> dict[str, list]:
 
     data, model_name = _generate(f"{SYSTEM_PROMPT}\n\n{user_prompt}", parse, attempts=2)
     data["generator"] = model_name
+
+    # 2번은 항상 빈칸 채우기. 형식이 어긋나면 분석 전체를 다시 돌리지 않고 2번만 다시 만든다.
+    quizzes = data["quizzes"]
+    short = next((q for q in quizzes if q.get("stepNumber") == 2), None)
+    problem = _cloze_problem(short, _build_material_context(sections)) if short else None
+    if problem:
+        print(f"[AI] 2번 빈칸 형식 위반({problem}) → 2번만 재생성", file=sys.stderr)
+        try:
+            fixed = regenerate_single_quiz(
+                sections, 2,
+                current_question=short.get("questionText") if short else None,
+                other_questions=[q.get("questionText") for q in quizzes if q is not short],
+            )
+            data["quizzes"] = [fixed if q is short else q for q in quizzes]
+        except RuntimeError as e:
+            # 재생성까지 실패해도 분석은 살린다(검수 화면에서 사람이 고치거나 재생성).
+            print(f"[AI] 2번 재생성 실패, 원본 유지: {e}", file=sys.stderr)
     return data
 
 
@@ -250,16 +271,33 @@ _STEP_TYPES = {
 _TYPE_LOCKS = {
     "OX": '이 문제는 참/거짓을 묻는 OX 문장이어야 하며, correctAnswer는 정확히 "O" 또는 "X"여야 합니다.',
     "SHORT": (
-        "이 문제는 단답형입니다. 절대 참/거짓(OX) 문장으로 만들지 마세요. "
-        'correctAnswer는 "O"/"X"가 아니라 낱말 하나여야 합니다. '
-        "자연스러운 질문을 우선하되(정답에 억지로 끼워맞추지 말 것, '~를 뜻하는 한 단어를 쓰세요' 금지), "
-        "정답이 자연스럽게 특정되지 않는 애매한 경우에만 교재 본문 문장에 빈칸(______)을 만들어 채우게 하세요."
+        "이 문제는 빈칸 채우기입니다. 절대 참/거짓(OX) 문장으로 만들지 마세요. "
+        "교재 본문의 실제 문장에서 핵심어 한 자리를 빈칸 ______ (밑줄 6개, 정확히 1개)로 바꾸고 "
+        "'빈칸에 들어갈 말은 무엇일까요?'로 묻습니다. "
+        "correctAnswer는 빈칸에 그대로 들어가는 한 단어(띄어쓰기 없음)이며 교재 본문에 그 형태로 나와야 합니다."
     ),
     "ESSAY": "이 문제는 짧은 서술형입니다. OX·단답이 아니라 한두 문장으로 생각을 정리하게 하고, correctAnswer는 모범답안 문장입니다.",
 }
 
 
-def _validate_quiz_type(quiz: dict, q_type: str) -> bool:
+_BLANK_RE = re.compile(r"_{3,}")
+
+
+def _cloze_problem(quiz: dict, material: str) -> str | None:
+    """2번 빈칸 채우기 형식 검사. 문제가 없으면 None, 있으면 사유. 빈칸 표기는 ______로 통일한다."""
+    question = quiz.get("questionText") or ""
+    ans = (quiz.get("correctAnswer") or "").strip()
+    if len(_BLANK_RE.findall(question)) != 1:
+        return "빈칸(______)이 정확히 1개가 아님"
+    if not ans or any(c.isspace() for c in ans):
+        return f"정답이 한 단어가 아님({ans!r})"
+    if material and re.sub(r"\s", "", ans) not in re.sub(r"\s", "", material):
+        return f"정답이 교재 본문에 없음({ans!r})"
+    quiz["questionText"] = _BLANK_RE.sub("______", question)
+    return None
+
+
+def _validate_quiz_type(quiz: dict, q_type: str, material: str = "") -> bool:
     """생성 결과가 기대 유형과 실제로 맞는지(라벨이 아니라 내용/정답 기준) 검증."""
     ans = (quiz.get("correctAnswer") or "").strip()
     question = (quiz.get("questionText") or "").strip()
@@ -269,8 +307,8 @@ def _validate_quiz_type(quiz: dict, q_type: str) -> bool:
     if q_type == "OX":
         return upper in ("O", "X")
     if q_type == "SHORT":
-        # 단답형인데 정답이 O/X면 실제로는 OX형이 샌 것 → 거부
-        return bool(ans) and upper not in ("O", "X")
+        # 단답형인데 정답이 O/X면 실제로는 OX형이 샌 것 → 거부. 형식은 항상 빈칸 채우기.
+        return bool(ans) and upper not in ("O", "X") and _cloze_problem(quiz, material) is None
     if q_type == "ESSAY":
         return bool(ans)
     return True
@@ -329,7 +367,7 @@ questionType은 반드시 "{q_type}"이어야 합니다.
         data["stepNumber"] = step_number
         data["questionType"] = q_type  # 유형 라벨은 코드가 고정
         # 라벨만 고정하면 'OX 내용 + SHORT 라벨'이 새므로, 내용/정답으로 유형을 검증
-        if not _validate_quiz_type(data, q_type):
+        if not _validate_quiz_type(data, q_type, _build_material_context(sections)):
             raise ValueError(f"유형 불일치(기대 {q_type}, 정답={data.get('correctAnswer')!r})")
         return data
 

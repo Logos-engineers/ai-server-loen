@@ -6,10 +6,10 @@ import pytest
 
 import services.quiz_generator as qg
 
-SECTIONS = [{"type": "intro", "text": "배경"}, {"type": "point", "number": 1, "title": "제목", "items": []}]
+SECTIONS = [{"type": "intro", "text": "은혜를 받은 사람은 감사로 반응한다."}, {"type": "point", "number": 1, "title": "제목", "items": []}]
 GOOD = json.dumps({"summaries": ["a", "b", "c"], "quizzes": [
     {"stepNumber": 1, "questionType": "OX", "questionText": "q1", "correctAnswer": "X", "explanation": "e"},
-    {"stepNumber": 2, "questionType": "SHORT", "questionText": "q2", "correctAnswer": "감사", "explanation": "e"},
+    {"stepNumber": 2, "questionType": "SHORT", "questionText": "은혜를 받은 사람은 ____로 반응한다. 빈칸에 들어갈 말은?", "correctAnswer": "감사", "explanation": "e"},
     {"stepNumber": 3, "questionType": "ESSAY", "questionText": "q3", "correctAnswer": "답", "explanation": "e"},
 ]})
 
@@ -63,3 +63,25 @@ def test_notes_not_in_quiz_input():
         {"number": "(1)", "text": "보이는 항목", "children": [], "notes": ["인도자만 보는 해설"]}]}]
     ctx = qg._build_material_context(secs)
     assert "보이는 항목" in ctx and "인도자만 보는 해설" not in ctx
+
+
+def test_cloze_problem_rules():
+    material = "은혜를 받은 사람은 감사로 반응한다."
+    ok = {"questionText": "은혜를 받은 사람은 ___로 반응한다.", "correctAnswer": "감사"}
+    assert qg._cloze_problem(ok, material) is None and "______" in ok["questionText"]  # 표기 통일
+    assert qg._cloze_problem({"questionText": "무엇으로 반응하나요?", "correctAnswer": "감사"}, material)  # 빈칸 없음
+    assert qg._cloze_problem({"questionText": "____ ____", "correctAnswer": "감사"}, material)  # 빈칸 2개
+    assert qg._cloze_problem({"questionText": "____로 반응", "correctAnswer": "감사 기도"}, material)  # 두 단어
+    assert qg._cloze_problem({"questionText": "____로 반응", "correctAnswer": "찬양"}, material)  # 교재에 없음
+
+
+def test_bad_short_is_repaired_by_regenerating_step2_only(monkeypatch, calls):
+    bad = json.loads(GOOD)
+    bad["quizzes"][1]["questionText"] = "은혜를 받으면 어떻게 반응하나요?"  # 빈칸 없음
+    fixed = {"stepNumber": 2, "questionType": "SHORT", "questionText": "은혜를 받은 사람은 ______로 반응한다.", "correctAnswer": "감사", "explanation": "e"}
+    replies = iter([json.dumps(bad), json.dumps(fixed)])
+    monkeypatch.setattr(qg, "_complete", lambda p, prompt: calls.append(p) or next(replies))
+    out = qg.generate_quizzes(SECTIONS)
+    assert calls == ["claude", "claude"]  # 전체 1회 + 2번만 재생성 1회
+    assert out["quizzes"][1]["questionText"] == fixed["questionText"]
+    assert [q["stepNumber"] for q in out["quizzes"]] == [1, 2, 3]

@@ -11,7 +11,9 @@ QUIZ = {"summaries": ["a", "b", "c"], "quizzes": [{"stepNumber": 1}], "generator
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(obs, "INTERNAL_API_TOKEN", "t")
-    monkeypatch.setattr(obs, "generate_quizzes", lambda sections: QUIZ)
+    titles = []
+    monkeypatch.setattr(obs, "generate_quizzes", lambda sections, title=None: titles.append(title) or QUIZ)
+    monkeypatch.setattr(obs, "_titles_seen", titles, raising=False)
     return TestClient(app)
 
 
@@ -25,6 +27,7 @@ def test_hwp_path_skips_refiner_and_returns_meta_gate(client, monkeypatch):
     assert body["meta"]["title"] == "영혼의 도피성, 예수 그리스도"
     assert body["gate"]["templateOk"] is True and body["gate"]["missingLines"] == []
     assert body["generator"] == "claude-opus-5" and body["summary"] == ["a", "b", "c"]
+    assert obs._titles_seen == ["영혼의 도피성, 예수 그리스도"]  # 제목 단어를 2번 정답에서 빼려고 넘긴다
 
 
 def test_pdf_path_still_refines(client, monkeypatch):

@@ -66,3 +66,21 @@ def test_gate_flags_other_template():
     gate = check_gate(old, parse_obs_sections(old, paragraph_mode=True))
     assert gate["templateOk"] is False
     assert gate["warnings"]
+
+
+def test_refiner_result_losing_lines_is_rejected(monkeypatch):
+    import json
+
+    import services.section_refiner as sr
+
+    pdf = "III. 말씀 정리하기\n1. 첫 질문입니까?\n ▶ 해설입니다.\n2-1. 하위 질문은 무엇일까요?\nIV. 적용하기\n1. 적용\n"
+    draft = parse_obs_sections(pdf)
+    dropped = json.loads(json.dumps(draft))
+    dropped[0]["notes"] = []  # 교정본이 해설(+이어붙은 하위 질문)을 지운 상황
+
+    class Resp:
+        text = json.dumps(dropped, ensure_ascii=False)
+
+    monkeypatch.setattr(sr._model, "generate_content", lambda *a, **k: Resp())
+    monkeypatch.setattr(sr, "_MIN_VOLUME_RATIO", 0.0)  # 총량 가드는 통과시키고 누락 가드만 본다
+    assert sr.refine_sections(pdf, draft) == draft

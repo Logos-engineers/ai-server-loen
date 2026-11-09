@@ -72,7 +72,8 @@ def process_obs(request: ProcessRequest, x_internal_token: str | None = Header(d
         if gate["warnings"]:
             print(f"[AI] gate warnings: {gate['warnings']}", file=sys.stderr)
 
-        ai_result = generate_quizzes(sections)
+        meta = extract_meta(text)
+        ai_result = generate_quizzes(sections, title=meta["title"])
 
         quizzes = ai_result.get("quizzes", [])
         summary = ai_result.get("summaries", [])
@@ -82,7 +83,7 @@ def process_obs(request: ProcessRequest, x_internal_token: str | None = Header(d
 
         return ProcessResponse(
             sections=sections, summary=summary, quizzes=quizzes,
-            meta=extract_meta(text), gate=gate, generator=generator,
+            meta=meta, gate=gate, generator=generator,
         )
     except HTTPException:
         raise
